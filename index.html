@@ -359,6 +359,7 @@
                 defects: JSON.parse(JSON.stringify(BASE_CHECKLIST)) 
             },
             negotiation: 0, 
+            customBasePrice: null, // New field for custom base price
             history: []
         };
 
@@ -575,10 +576,18 @@
             updateResultUI();
         }
 
+        function updateBasePrice(val) {
+            state.customBasePrice = parseInt(val) || 0;
+            updateResultUI();
+        }
+
         function updateResultUI() {
             const { phone, storage, grade, defects } = state.selection;
             
-            const basePrice = phone.basePrice * storage.multiplier;
+            // Calculs (with custom base price if set)
+            // If customBasePrice is set, use it. Otherwise compute from DB.
+            const basePrice = state.customBasePrice !== null ? state.customBasePrice : (phone.basePrice * storage.multiplier);
+            
             const priceAfterGrade = basePrice * grade.multiplier;
             
             let repairCosts = 0;
@@ -624,9 +633,12 @@
                         </div>
 
                         <div class="p-5 space-y-3 text-sm">
-                            <div class="flex justify-between text-slate-500">
-                                <span>Prix marché (Parfait état)</span>
-                                <span>${formatMoney(Math.round(basePrice))}</span>
+                            <div class="flex justify-between items-center text-slate-500">
+                                <span class="flex items-center gap-1">Prix marché <i data-lucide="edit-2" class="w-3 h-3 text-slate-300"></i></span>
+                                <div class="flex items-center gap-1">
+                                    <input type="number" value="${Math.round(basePrice)}" oninput="updateBasePrice(this.value)" class="w-24 text-right font-bold text-slate-700 border-b border-dashed border-slate-300 focus:border-amber-500 outline-none bg-transparent py-0.5">
+                                    <span>F</span>
+                                </div>
                             </div>
                             <div class="flex justify-between text-slate-500">
                                 <span>Décote esthétique (${grade.id})</span>
@@ -695,7 +707,9 @@
         async function getPDFBlob() {
             const { phone, storage, grade, defects } = state.selection;
             
-            const basePrice = phone.basePrice * storage.multiplier;
+            // Recalculate with potential custom base price
+            const basePrice = state.customBasePrice !== null ? state.customBasePrice : (phone.basePrice * storage.multiplier);
+            
             const priceAfterGrade = basePrice * grade.multiplier;
             const discount = Math.round(basePrice - priceAfterGrade);
             let repairCosts = 0;
@@ -848,6 +862,7 @@
             state.selection.grade = null;
             state.selection.defects = JSON.parse(JSON.stringify(BASE_CHECKLIST));
             state.negotiation = 0;
+            state.customBasePrice = null; // Reset custom base price
 
             document.getElementById('storage-section').classList.add('hidden');
             document.querySelectorAll('#phone-grid button').forEach(b => {
