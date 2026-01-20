@@ -146,6 +146,14 @@
                         <!-- Storage options injected by JS -->
                     </div>
                 </div>
+
+                <!-- Année (apparaît après stockage) -->
+                <div id="year-section" class="hidden mt-8 pt-6 border-t border-slate-100 animate-in fade-in slide-in-from-bottom-4">
+                    <h3 class="text-sm font-bold text-slate-900 mb-3 uppercase tracking-wide">Année d'achat</h3>
+                    <div id="year-options" class="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                        <!-- Years injected by JS -->
+                    </div>
+                </div>
             </div>
 
             <!-- STEP 2: Diagnostic Interactif -->
@@ -272,6 +280,10 @@
                     <td class="py-2 font-bold text-slate-900" id="pdf-storage">128 Go</td>
                 </tr>
                 <tr class="border-b border-slate-200">
+                    <td class="py-2 text-slate-500 font-medium">Année d'achat</td>
+                    <td class="py-2 font-bold text-slate-900" id="pdf-year">2023</td>
+                </tr>
+                <tr class="border-b border-slate-200">
                     <td class="py-2 text-slate-500 font-medium">Grade Esthétique</td>
                     <td class="py-2 font-bold text-slate-900" id="pdf-grade">Grade A (Bon État)</td>
                 </tr>
@@ -284,6 +296,10 @@
                 <div class="flex justify-between py-2 border-b border-slate-200">
                     <span class="text-slate-600">Valeur Marché (Base)</span>
                     <span class="font-medium" id="pdf-base-price">400 000 F</span>
+                </div>
+                <div class="flex justify-between py-2 border-b border-slate-200 text-slate-600">
+                    <span>Décote Année (<span id="pdf-age-label">1 an</span>)</span>
+                    <span class="text-red-500" id="pdf-age-discount">- 20 000 F</span>
                 </div>
                 <div class="flex justify-between py-2 border-b border-slate-200 text-slate-600">
                     <span>Décote Grade Esthétique</span>
@@ -356,12 +372,15 @@
                 phone: null,
                 storage: null,
                 grade: null,
+                year: null, // New: Purchase year
                 defects: JSON.parse(JSON.stringify(BASE_CHECKLIST)) 
             },
             negotiation: 0, 
-            customBasePrice: null, // New field for custom base price
+            customBasePrice: null, 
             history: []
         };
+
+        const DEPRECIATION_RATE = 0.05; // 5% per year
 
         // --- UTILS ---
         const formatMoney = (amount) => {
@@ -399,6 +418,7 @@
                 list.classList.add('hidden');
                 manual.classList.remove('hidden');
                 document.getElementById('storage-section').classList.add('hidden'); 
+                document.getElementById('year-section').classList.add('hidden');
             } else {
                 list.classList.remove('hidden');
                 manual.classList.add('hidden');
@@ -451,6 +471,40 @@
                 b.className = "flex-1 min-w-[80px] py-3 px-3 border border-slate-200 rounded-lg text-sm font-medium hover:border-slate-400 transition-all bg-white text-slate-600 active:bg-slate-50";
             });
             document.getElementById(`storage-${val}`).className = "flex-1 min-w-[80px] py-3 px-3 border border-amber-500 bg-amber-500 text-white rounded-lg text-sm font-bold shadow-md transform scale-105 transition-all";
+            
+            // Show years instead of next step
+            showYearOptions();
+        }
+
+        function showYearOptions() {
+            const section = document.getElementById('year-section');
+            const container = document.getElementById('year-options');
+            const currentYear = new Date().getFullYear();
+            
+            // Generate last 6 years
+            const years = [];
+            for(let i=0; i<6; i++) {
+                years.push(currentYear - i);
+            }
+
+            section.classList.remove('hidden');
+            container.innerHTML = years.map(year => `
+                <button onclick="selectYear(${year})" id="year-${year}"
+                    class="py-3 px-2 border border-slate-200 rounded-lg text-sm font-medium hover:border-slate-400 transition-all bg-white text-slate-600 active:bg-slate-50">
+                    ${year}
+                </button>
+            `).join('');
+            
+            setTimeout(() => section.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+        }
+
+        function selectYear(year) {
+            state.selection.year = year;
+            
+            document.querySelectorAll('#year-options button').forEach(b => {
+                b.className = "py-3 px-2 border border-slate-200 rounded-lg text-sm font-medium hover:border-slate-400 transition-all bg-white text-slate-600 active:bg-slate-50";
+            });
+            document.getElementById(`year-${year}`).className = "py-3 px-2 border border-amber-500 bg-amber-500 text-white rounded-lg text-sm font-bold shadow-md transform scale-105 transition-all";
             
             setTimeout(() => nextStep(), 300);
         }
@@ -582,14 +636,24 @@
         }
 
         function updateResultUI() {
-            const { phone, storage, grade, defects } = state.selection;
+            const { phone, storage, grade, defects, year } = state.selection;
             
-            // Calculs (with custom base price if set)
-            // If customBasePrice is set, use it. Otherwise compute from DB.
-            const basePrice = state.customBasePrice !== null ? state.customBasePrice : (phone.basePrice * storage.multiplier);
+            // 1. Base Price
+            let basePrice = state.customBasePrice !== null ? state.customBasePrice : (phone.basePrice * storage.multiplier);
             
+            // 2. Age Depreciation
+            const currentYear = new Date().getFullYear();
+            const age = Math.max(0, currentYear - (year || currentYear));
+            const ageDiscountAmount = Math.round(basePrice * (age * DEPRECIATION_RATE));
+            const priceAfterAge = basePrice - ageDiscountAmount;
+
+            // 3. Grade Discount (applied on top of age-depreciated price or base price? Usually from base)
+            // Let's apply grade multiplier to the base price for consistency with previous logic, 
+            // then subtract both discounts.
             const priceAfterGrade = basePrice * grade.multiplier;
-            
+            const gradeDiscountAmount = Math.round(basePrice - priceAfterGrade);
+
+            // 4. Repairs
             let repairCosts = 0;
             let blocker = null;
 
@@ -600,7 +664,10 @@
                 }
             });
 
-            let calculatedPrice = Math.round(priceAfterGrade - repairCosts);
+            // 5. Final Calculation
+            // Formula: Base - AgeDiscount - GradeDiscount - Repairs
+            let calculatedPrice = Math.round(basePrice - ageDiscountAmount - gradeDiscountAmount - repairCosts);
+            
             let finalPrice = calculatedPrice + parseInt(state.negotiation);
             if (finalPrice < 0) finalPrice = 0;
 
@@ -624,7 +691,7 @@
                         <div class="bg-slate-900 p-4 text-white flex justify-between items-center">
                             <div>
                                 <h3 class="font-bold text-lg leading-tight">${phone.model}</h3>
-                                <div class="text-xs text-slate-400">${storage.label} • Grade ${grade.id}</div>
+                                <div class="text-xs text-slate-400">${storage.label} • ${year} • Grade ${grade.id}</div>
                             </div>
                             <div class="text-right">
                                 <div class="text-xs text-slate-400 uppercase tracking-wider">Offre Cash</div>
@@ -640,9 +707,17 @@
                                     <span>F</span>
                                 </div>
                             </div>
+
+                            ${age > 0 ? `
+                            <div class="flex justify-between text-slate-500">
+                                <span>Décote Ancienneté (${age} an${age>1?'s':''})</span>
+                                <span class="text-red-500">- ${formatMoney(ageDiscountAmount)}</span>
+                            </div>
+                            ` : ''}
+
                             <div class="flex justify-between text-slate-500">
                                 <span>Décote esthétique (${grade.id})</span>
-                                <span class="text-red-500">- ${formatMoney(Math.round(basePrice - priceAfterGrade))}</span>
+                                <span class="text-red-500">- ${formatMoney(gradeDiscountAmount)}</span>
                             </div>
                             
                             ${repairCosts > 0 ? `
@@ -705,26 +780,42 @@
 
         // --- PDF GENERATION & SHARING ---
         async function getPDFBlob() {
-            const { phone, storage, grade, defects } = state.selection;
+            const { phone, storage, grade, defects, year } = state.selection;
             
-            // Recalculate with potential custom base price
             const basePrice = state.customBasePrice !== null ? state.customBasePrice : (phone.basePrice * storage.multiplier);
             
+            // Age Calc
+            const currentYear = new Date().getFullYear();
+            const age = Math.max(0, currentYear - (year || currentYear));
+            const ageDiscountAmount = Math.round(basePrice * (age * DEPRECIATION_RATE));
+            
+            // Grade Calc
             const priceAfterGrade = basePrice * grade.multiplier;
-            const discount = Math.round(basePrice - priceAfterGrade);
+            const gradeDiscountAmount = Math.round(basePrice - priceAfterGrade);
+
+            // Repairs
             let repairCosts = 0;
             const brokenItems = defects.filter(d => d.broken && !d.isBlocker);
             brokenItems.forEach(d => repairCosts += d.cost);
-            const calculatedPrice = Math.round(priceAfterGrade - repairCosts);
+            
+            // Final
+            const calculatedPrice = Math.round(basePrice - ageDiscountAmount - gradeDiscountAmount - repairCosts);
             const finalPrice = calculatedPrice + parseInt(state.negotiation);
 
             document.getElementById('pdf-date').innerText = "Date: " + new Date().toLocaleDateString('fr-FR');
             document.getElementById('pdf-ref').innerText = "Réf: #" + Math.floor(Math.random() * 9000 + 1000);
             document.getElementById('pdf-model').innerText = phone.model;
             document.getElementById('pdf-storage').innerText = storage.label;
+            document.getElementById('pdf-year').innerText = year;
             document.getElementById('pdf-grade').innerText = `${grade.label} (${grade.id})`;
+            
             document.getElementById('pdf-base-price').innerText = formatMoney(Math.round(basePrice));
-            document.getElementById('pdf-grade-discount').innerText = "- " + formatMoney(discount);
+            
+            // Age discount display in PDF
+            document.getElementById('pdf-age-label').innerText = age + (age > 1 ? " ans" : " an");
+            document.getElementById('pdf-age-discount').innerText = "- " + formatMoney(ageDiscountAmount);
+            
+            document.getElementById('pdf-grade-discount').innerText = "- " + formatMoney(gradeDiscountAmount);
             
             const repairsContainer = document.getElementById('pdf-repairs-section');
             if (brokenItems.length > 0) {
@@ -799,9 +890,14 @@
                     }, 1000);
                 }
             } catch (err) {
+                // FIXED: Handle "Error: Share canceled" specifically
+                if (err.name === 'AbortError' || err.message.toLowerCase().includes('cancel') || err.message.toLowerCase().includes('share canceled')) {
+                    // Do nothing or log info, don't show error alert
+                    console.log('Partage annulé par l\'utilisateur');
+                    return;
+                }
+
                 console.error("Erreur de partage:", err);
-                
-                if (err.name === 'AbortError') return;
 
                 if (err.name === 'InvalidStateError') {
                     alert("Une fenêtre de partage est déjà ouverte. Veuillez la fermer avant de réessayer.");
@@ -860,11 +956,13 @@
             state.selection.phone = null;
             state.selection.storage = null;
             state.selection.grade = null;
+            state.selection.year = null; // reset year
             state.selection.defects = JSON.parse(JSON.stringify(BASE_CHECKLIST));
             state.negotiation = 0;
             state.customBasePrice = null; // Reset custom base price
 
             document.getElementById('storage-section').classList.add('hidden');
+            document.getElementById('year-section').classList.add('hidden'); // hide year section
             document.querySelectorAll('#phone-grid button').forEach(b => {
                 b.classList.remove('ring-2', 'ring-amber-500', 'bg-amber-50');
                 b.classList.add('border-slate-200', 'bg-white');
